@@ -31,10 +31,11 @@ Nanny encompasses three related applications:
   babysitters, and healthcare providers.
 
 - **Nanny Monitor** — smartphone-based baby monitoring that repurposes existing
-  devices. Microphone-based sound analysis infers sleep state (sleeping,
-  stirring, awake), with ambient soundscape generation (rain, ocean, wind,
-  shush), nightlight control, and activity logging. Local peer-to-peer via
-  WebRTC for privacy, with optional server-mediated remote access.
+  devices across Apple, web, and Android ecosystems. On-device cry detection,
+  audio passthrough to headphones, video streaming between devices, and
+  wearable companion alerts. Three parallel development streams converge through
+  a shared signalling protocol for cross-ecosystem interoperability. See
+  [Nanny Monitor architecture](#nanny-monitor-architecture) below.
 
 - **Nanny Tempo** — contraction timing and labour guidance for pregnancy. A
   focused progressive web application providing evidence-based contraction
@@ -58,6 +59,129 @@ Nanny operates within the broader Geisha and Naamio ecosystem:
 - **Geisha suite** encompasses privacy-first lifestyle applications (Barista,
   Chef, Grocer, Courier, Herald, Host, Guide, Aide), all governed by the Omnifi
   Foundation and built on shared Minttu design language.
+
+## Nanny Monitor architecture
+
+Nanny Monitor develops across three parallel streams — Apple, web, and
+Android — each exploiting its ecosystem's unique capabilities while converging
+through a shared protocol for cross-platform interoperability.
+
+### Why three streams
+
+The web alone cannot reliably deliver a baby monitor. Background execution is
+unreliable — iOS Safari suspends tabs within seconds of screen lock. Hardware
+integration (AirPods spatial audio, Apple Watch haptic alerts, Wear OS
+complications, CarPlay dashboards) is inaccessible from a browser. Audio
+routing lacks device-level control. Always-on reliability requires native
+audio session configuration that signals to the operating system that this
+audio stream must not be interrupted.
+
+Each stream exists because it solves problems the others cannot. The value
+comes from their ability to interoperate.
+
+### Progressive enhancement
+
+Every stream follows the same conceptual progression, where each tier delivers
+genuine standalone value:
+
+```
+Tier 0 — Single device, self-contained
+Tier 1 — Two devices, local network, no server
+Tier 2 — Wearable companion (alerts and control)
+Tier 3 — Persistent UI surface (lock screen, complication, tile)
+Tier 4 — Living room and vehicle integration
+Tier 5 — Cross-ecosystem interop via shared protocol
+Tier 6 — Multi-caregiver, multi-viewer
+```
+
+A person who never moves past tier 0 still has a useful baby monitor. A person
+who reaches tier 5 can have an Android baby station streaming to an iPad parent
+station with an Apple Watch receiving haptic alerts — all because the interop
+protocol ties the streams together.
+
+### The Nanny signalling protocol
+
+The three streams converge through a shared signalling and streaming protocol.
+Nanny uses WebRTC as the media transport and defines a thin signalling layer
+on top of WebSocket that all three streams speak.
+
+The Nanny signalling protocol defines:
+
+- **Session advertisement** — a baby station announces itself with a device
+  capability manifest (audio-only versus audio and video, supported codecs,
+  ML models available, battery level, device name)
+- **Session negotiation** — standard SDP offer/answer exchange tunnelled
+  through WebSocket JSON messages
+- **ICE candidate relay** — standard trickle ICE, tunnelled identically
+- **Alert propagation** — when any station's ML model detects an event (cry,
+  motion, noise threshold), it broadcasts a structured alert to all connected
+  parent stations
+- **Control messages** — parent stations can adjust baby station sensitivity,
+  toggle video, request audio level data, or mute passthrough
+- **Presence** — which caregivers are connected, which baby stations are active,
+  connection health
+
+The signalling server is intentionally minimal — it relays messages between
+peers and maintains no media state. It can be self-hosted as a single binary.
+For local-network scenarios, the signalling server is unnecessary; each
+platform uses its native peer-to-peer discovery.
+
+### Codec alignment
+
+| Media | Required | Preferred | Rationale |
+|-------|----------|-----------|-----------|
+| Audio | Opus | — | Supported natively by WebRTC on all platforms. Low latency, excellent quality at low bitrate |
+| Video | H.264 Baseline | H.265/HEVC | H.264 is hardware-accelerated everywhere. H.265 offers better quality at lower bitrate on Apple and most Android devices, with H.264 fallback for web |
+
+### ML model alignment
+
+Each stream uses its platform's native ML framework for cry detection. All are
+trained from the same dataset and produce alerts in the same JSON format. The
+model itself does not need to be identical across platforms — what matters is
+that the alert semantics are consistent.
+
+The training pipeline produces:
+- Apple: Core ML model alongside the built-in SoundAnalysis classifier
+- Android: TensorFlow Lite model optimised for hardware acceleration
+- Web: ONNX model compiled to WebAssembly
+
+### Cross-stream interoperability
+
+| Baby station | Parent station | Connection method | Available from |
+|-------------|---------------|-------------------|----------------|
+| Apple | Apple | Native peer-to-peer | Tier 1 |
+| Apple | Apple Watch | Native companion | Tier 2 |
+| Apple | Web | Signalling protocol + WebRTC | Tier 5 |
+| Apple | Android | Signalling protocol + WebRTC | Tier 5 |
+| Android | Android | Native peer-to-peer | Tier 1 |
+| Android | Wear OS | Native companion | Tier 2 |
+| Android | Web | Signalling protocol + WebRTC | Tier 5 |
+| Android | Apple | Signalling protocol + WebRTC | Tier 5 |
+| Web | Web | WebRTC peer-to-peer | Tier 1 |
+| Web | Apple | Signalling protocol + WebRTC | Tier 5 |
+| Web | Android | Signalling protocol + WebRTC | Tier 5 |
+
+Within-ecosystem connections use native protocols for superior performance and
+reliability. Cross-ecosystem connections use the signalling protocol and
+WebRTC as the universal bridge.
+
+### Shared components
+
+- **Cry detection model** — single training pipeline producing platform-native
+  models with consistent sensitivity presets and alert semantics
+- **Alert format** — structured JSON with device information, event type,
+  confidence, sensitivity preset, audio level, and model metadata
+- **Signalling server** — single implementation serving all three streams,
+  speaking the Nanny signalling protocol over WebSocket
+- **Authentication** — all streams authenticate through `auth.geisha.app` for
+  server-mediated connections; local connections require no authentication
+
+### Privacy at every tier
+
+Tier 0 requires no network. Tiers 1 and 2 require no internet. Tiers 3 through
+5 require a signalling server that sees no media. At no point does audio or
+video pass through any infrastructure unless the person explicitly chooses to
+use the hosted signalling service instead of self-hosting.
 
 ## What this repository is for
 
@@ -109,17 +233,38 @@ Proposals in this repository may affect any part of the Nanny ecosystem:
 - Developmental milestone tracking with CDC 2022 checklist integration
 - Age-corrected tracking for premature infants
 
-**Nanny Monitor**
-- Microphone-based audio monitoring with RMS sound level analysis
-- Sleep state inference (sleeping, stirring, awake) from audio patterns
-- Ambient soundscape generation (rain, ocean, wind, shush)
-- Night light control with brightness and warmth adjustment
-- Activity logging with state transition tracking
-- Real-time waveform and frequency spectrum visualisation
-- Wake Lock API for uninterrupted monitoring
-- Local peer-to-peer via WebRTC with mDNS and QR code pairing
-- Optional server-mediated remote access with DTLS-SRTP encryption
-- Cry detection and motion analysis via on-device machine learning
+**Nanny Monitor — Apple stream**
+- Single-device audio monitoring with cry detection and headphone passthrough
+- Two-device local monitoring via native peer-to-peer with video
+- Apple Watch companion with haptic alerts, complications, and glanceable UI
+- Live Activities and Dynamic Island for persistent monitoring status
+- Apple TV nursery dashboard and CarPlay vehicle monitoring
+- WebRTC interop bridge for cross-ecosystem connections
+- SharePlay multi-viewer, HomePod baby station, Siri Shortcuts
+
+**Nanny Monitor — web stream**
+- Single-tab audio monitoring with Wasm-based cry detection
+- WebRTC peer-to-peer two-browser monitoring with QR code pairing
+- Progressive web application with Service Worker and push notifications
+- Signalling server integration for remote access
+- Advanced ML pipeline (motion detection, noise classification)
+- Full signalling protocol interop and multi-viewer with optional recording
+
+**Nanny Monitor — Android stream**
+- Single-device monitoring with foreground service and cry detection
+- Two-device local monitoring via native peer-to-peer with video
+- Wear OS companion with haptic alerts, tiles, and complications
+- Notification channel hierarchy and home screen widgets
+- Android TV nursery dashboard and Android Auto vehicle monitoring
+- WebRTC interop bridge for cross-ecosystem connections
+- Google Home integration and multi-viewer
+
+**Nanny Monitor — shared components**
+- Nanny signalling protocol specification
+- Alert format specification
+- ML model training pipeline producing platform-native models
+- Signalling server (self-hostable)
+- Codec alignment and interoperability testing
 
 **Nanny Tempo**
 - Contraction timing with start/stop and duration tracking
@@ -144,7 +289,7 @@ Proposals in this repository may affect any part of the Nanny ecosystem:
 - Deno Fresh 2 progressive web application with Islands Architecture
 - Declarative shadow DOM and custom web components
 - Offline-first via Service Workers and IndexedDB
-- Minttu core CSS → Geisha style library → Nanny style
+- Minttu core CSS, Geisha style library, Nanny style
 - View Transitions API for smooth navigation
 - Web Share Target API for content capture
 - Push notifications for reminders and alerts
